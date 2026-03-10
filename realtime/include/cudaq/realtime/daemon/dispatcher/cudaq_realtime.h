@@ -82,7 +82,7 @@ typedef struct {
   uint32_t vp_id;                      // virtual port ID
   cudaq_kernel_type_t kernel_type;     // regular/cooperative kernel
   cudaq_dispatch_mode_t dispatch_mode; // device call/graph launch
-  size_t dyn_shared_mem_bytes;         // dynamic shared memory per block (0=none)
+  size_t dyn_shared_mem_bytes; // dynamic shared memory per block (0=none)
 } cudaq_dispatcher_config_t;
 
 // GPU ring buffer pointers (device-visible mapped pointers)
