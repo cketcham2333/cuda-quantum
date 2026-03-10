@@ -169,11 +169,12 @@ extern "C" void launch_dispatch_kernel_wrapper(
     std::size_t tx_stride_sz, cudaq_function_entry_t *function_table,
     std::size_t func_count, volatile int *shutdown_flag, std::uint64_t *stats,
     std::size_t num_slots, std::uint32_t num_blocks,
-    std::uint32_t threads_per_block, cudaStream_t stream) {
+    std::uint32_t threads_per_block, std::size_t dyn_shared_mem_bytes,
+    cudaStream_t stream) {
   cudaq_launch_dispatch_kernel_regular(
       rx_flags, tx_flags, rx_data, tx_data, rx_stride_sz, tx_stride_sz,
       function_table, func_count, shutdown_flag, stats, num_slots, num_blocks,
-      threads_per_block, stream);
+      threads_per_block, dyn_shared_mem_bytes, stream);
 }
 
 //==============================================================================

@@ -190,7 +190,8 @@ cudaq_status_t cudaq_dispatcher_start(cudaq_dispatcher_t *dispatcher) {
         dispatcher->ringbuffer.tx_stride_sz, dispatcher->table.entries,
         dispatcher->table.count, dispatcher->shutdown_flag, dispatcher->stats,
         dispatcher->config.num_slots, dispatcher->config.num_blocks,
-        dispatcher->config.threads_per_block, dispatcher->stream);
+        dispatcher->config.threads_per_block,
+        dispatcher->config.dyn_shared_mem_bytes, dispatcher->stream);
   }
 
   cudaError_t err = cudaGetLastError();

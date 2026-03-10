@@ -395,13 +395,19 @@ extern "C" cudaError_t cudaq_dispatch_kernel_query_occupancy(
 }
 
 extern "C" cudaError_t cudaq_dispatch_kernel_cooperative_query_occupancy(
-    int* out_blocks, uint32_t threads_per_block) {
+    int* out_blocks, uint32_t threads_per_block,
+    size_t dyn_shared_mem_bytes) {
+  auto* kernel_fn = cudaq::realtime::dispatch_kernel_device_call_only<
+      cudaq::realtime::CooperativeKernel>;
+  if (dyn_shared_mem_bytes > 0) {
+    cudaError_t attr_err = cudaFuncSetAttribute(
+        kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(dyn_shared_mem_bytes));
+    if (attr_err != cudaSuccess) return attr_err;
+  }
   int num_blocks = 0;
   cudaError_t err = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-      &num_blocks,
-      cudaq::realtime::dispatch_kernel_device_call_only<
-          cudaq::realtime::CooperativeKernel>,
-      threads_per_block, 0);
+      &num_blocks, kernel_fn, threads_per_block, dyn_shared_mem_bytes);
   if (err != cudaSuccess) return err;
   if (out_blocks) *out_blocks = num_blocks;
   return cudaSuccess;
@@ -421,14 +427,12 @@ extern "C" void cudaq_launch_dispatch_kernel_regular(
     std::size_t num_slots,
     std::uint32_t num_blocks,
     std::uint32_t threads_per_block,
+    std::size_t dyn_shared_mem_bytes,
     cudaStream_t stream) {
-  // Use device-call-only kernel (no graph launch support)
-  // Note: rx_data/rx_stride_sz are available in the ringbuffer struct but
-  // not passed to the kernel since it reads RX addresses from rx_flags.
   (void)rx_data;
   (void)rx_stride_sz;
   cudaq::realtime::dispatch_kernel_device_call_only<cudaq::realtime::RegularKernel>
-      <<<num_blocks, threads_per_block, 0, stream>>>(
+      <<<num_blocks, threads_per_block, dyn_shared_mem_bytes, stream>>>(
           rx_flags, tx_flags, tx_data, tx_stride_sz,
           function_table, func_count,
           shutdown_flag, stats, num_slots);
@@ -448,9 +452,19 @@ extern "C" void cudaq_launch_dispatch_kernel_cooperative(
     std::size_t num_slots,
     std::uint32_t num_blocks,
     std::uint32_t threads_per_block,
+    std::size_t dyn_shared_mem_bytes,
     cudaStream_t stream) {
   (void)rx_data;
   (void)rx_stride_sz;
+
+  auto* kernel_fn = cudaq::realtime::dispatch_kernel_device_call_only<
+      cudaq::realtime::CooperativeKernel>;
+  if (dyn_shared_mem_bytes > 0) {
+    cudaFuncSetAttribute(kernel_fn,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize,
+                         static_cast<int>(dyn_shared_mem_bytes));
+  }
+
   void* kernel_args[] = {
       const_cast<std::uint64_t**>(&rx_flags),
       const_cast<std::uint64_t**>(&tx_flags),
@@ -464,9 +478,9 @@ extern "C" void cudaq_launch_dispatch_kernel_cooperative(
   };
 
   cudaLaunchCooperativeKernel(
-      reinterpret_cast<void*>(
-          cudaq::realtime::dispatch_kernel_device_call_only<cudaq::realtime::CooperativeKernel>),
-      dim3(num_blocks), dim3(threads_per_block), kernel_args, 0, stream);
+      reinterpret_cast<void*>(kernel_fn),
+      dim3(num_blocks), dim3(threads_per_block), kernel_args,
+      dyn_shared_mem_bytes, stream);
 }
 
 //==============================================================================

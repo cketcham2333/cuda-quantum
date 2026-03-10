@@ -132,6 +132,10 @@ struct BridgeConfig {
   uint32_t num_blocks = 1;
   uint32_t threads_per_block = 32;
 
+  /// @brief Dynamic shared memory per block (bytes).  0 = none.
+  /// Set by the application before calling bridge_run().
+  size_t dyn_shared_mem_bytes = 0;
+
   /// @brief Pointer to the dispatch kernel launch function.
   /// Default: cudaq_launch_dispatch_kernel_regular
   cudaq_dispatch_launch_fn_t launch_fn = nullptr;
@@ -372,12 +376,14 @@ inline int bridge_run(BridgeConfig &config) {
       dconfig.threads_per_block = 1;
       dconfig.num_slots = 0;
       dconfig.slot_size = 0;
+      dconfig.dyn_shared_mem_bytes = 0;
     } else {
       dconfig.kernel_type = config.kernel_type;
       dconfig.num_blocks = config.num_blocks;
       dconfig.threads_per_block = config.threads_per_block;
       dconfig.num_slots = static_cast<uint32_t>(config.num_pages);
       dconfig.slot_size = static_cast<uint32_t>(config.page_size);
+      dconfig.dyn_shared_mem_bytes = config.dyn_shared_mem_bytes;
     }
 
     if (cudaq_dispatcher_create(manager, &dconfig, &dispatcher) != CUDAQ_OK) {
@@ -565,11 +571,12 @@ inline void bridge_launch_dispatch_kernel(
     std::size_t tx_stride_sz, cudaq_function_entry_t *function_table,
     std::size_t func_count, volatile int *shutdown_flag, std::uint64_t *stats,
     std::size_t num_slots, std::uint32_t num_blocks,
-    std::uint32_t threads_per_block, cudaStream_t stream) {
+    std::uint32_t threads_per_block, std::size_t dyn_shared_mem_bytes,
+    cudaStream_t stream) {
   cudaq_launch_dispatch_kernel_regular(
       rx_flags, tx_flags, rx_data, tx_data, rx_stride_sz, tx_stride_sz,
       function_table, func_count, shutdown_flag, stats, num_slots, num_blocks,
-      threads_per_block, stream);
+      threads_per_block, dyn_shared_mem_bytes, stream);
 }
 
 } // namespace cudaq::realtime

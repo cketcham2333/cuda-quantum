@@ -82,6 +82,7 @@ typedef struct {
   uint32_t vp_id;                      // virtual port ID
   cudaq_kernel_type_t kernel_type;     // regular/cooperative kernel
   cudaq_dispatch_mode_t dispatch_mode; // device call/graph launch
+  size_t dyn_shared_mem_bytes;         // dynamic shared memory per block (0=none)
 } cudaq_dispatcher_config_t;
 
 // GPU ring buffer pointers (device-visible mapped pointers)
@@ -118,7 +119,8 @@ typedef void (*cudaq_dispatch_launch_fn_t)(
     uint8_t *tx_data, size_t rx_stride_sz, size_t tx_stride_sz,
     cudaq_function_entry_t *function_table, size_t func_count,
     volatile int *shutdown_flag, uint64_t *stats, size_t num_slots,
-    uint32_t num_blocks, uint32_t threads_per_block, cudaStream_t stream);
+    uint32_t num_blocks, uint32_t threads_per_block,
+    size_t dyn_shared_mem_bytes, cudaStream_t stream);
 
 // Default dispatch kernel launch helpers (from libcudaq-realtime-dispatch.a)
 void cudaq_launch_dispatch_kernel_regular(
@@ -126,14 +128,16 @@ void cudaq_launch_dispatch_kernel_regular(
     uint8_t *tx_data, size_t rx_stride_sz, size_t tx_stride_sz,
     cudaq_function_entry_t *function_table, size_t func_count,
     volatile int *shutdown_flag, uint64_t *stats, size_t num_slots,
-    uint32_t num_blocks, uint32_t threads_per_block, cudaStream_t stream);
+    uint32_t num_blocks, uint32_t threads_per_block,
+    size_t dyn_shared_mem_bytes, cudaStream_t stream);
 
 void cudaq_launch_dispatch_kernel_cooperative(
     volatile uint64_t *rx_flags, volatile uint64_t *tx_flags, uint8_t *rx_data,
     uint8_t *tx_data, size_t rx_stride_sz, size_t tx_stride_sz,
     cudaq_function_entry_t *function_table, size_t func_count,
     volatile int *shutdown_flag, uint64_t *stats, size_t num_slots,
-    uint32_t num_blocks, uint32_t threads_per_block, cudaStream_t stream);
+    uint32_t num_blocks, uint32_t threads_per_block,
+    size_t dyn_shared_mem_bytes, cudaStream_t stream);
 
 // Unified dispatch launch function pointer type.
 // The unified kernel combines RDMA RX, RPC dispatch, and RDMA TX into a single
@@ -254,11 +258,12 @@ cudaq_status_t cudaq_dispatcher_get_processed(cudaq_dispatcher_t *dispatcher,
 
 // Force eager CUDA module loading for dispatch kernels (occupancy query).
 // Call before cudaq_dispatcher_start() to avoid lazy-loading deadlocks.
+// dyn_shared_mem_bytes is optional (0 = no dynamic shared memory).
 cudaError_t cudaq_dispatch_kernel_query_occupancy(int *out_blocks,
                                                   uint32_t threads_per_block);
-cudaError_t
-cudaq_dispatch_kernel_cooperative_query_occupancy(int *out_blocks,
-                                                  uint32_t threads_per_block);
+cudaError_t cudaq_dispatch_kernel_cooperative_query_occupancy(
+    int *out_blocks, uint32_t threads_per_block,
+    size_t dyn_shared_mem_bytes = 0);
 
 #ifdef __cplusplus
 }
