@@ -9,6 +9,7 @@
 #pragma once
 
 #include "QuantumExecutionQueue.h"
+#include "common/CompiledKernel.h"
 #include "common/Registry.h"
 #include "common/ThunkInterface.h"
 #include "common/Timing.h"
@@ -136,9 +137,6 @@ public:
   /// Is this QPU a simulator ?
   virtual bool isSimulator() { return true; }
 
-  /// @brief Return whether this QPU has conditional feedback support
-  virtual bool supportsConditionalFeedback() { return false; }
-
   /// @brief Return whether this QPU supports explicit measurements
   virtual bool supportsExplicitMeasurements() { return true; }
 
@@ -208,12 +206,13 @@ public:
 
   [[nodiscard]] virtual KernelThunkResultType
   launchModule(const std::string &name, mlir::ModuleOp module,
-               const std::vector<void *> &rawArgs, mlir::Type resultTy);
+               const std::vector<void *> &rawArgs);
 
   [[nodiscard]] virtual void *
   specializeModule(const std::string &name, mlir::ModuleOp module,
-                   const std::vector<void *> &rawArgs, mlir::Type resultTy,
-                   void *cachedEngine);
+                   const std::vector<void *> &rawArgs,
+                   std::optional<cudaq::JitEngine> &cachedEngine,
+                   bool isEntryPoint);
 
   /// @brief Notify the QPU that a new random seed value is set.
   /// By default do nothing, let subclasses override.
@@ -223,13 +222,12 @@ public:
 struct ModuleLauncher : public registry::RegisteredType<ModuleLauncher> {
   virtual ~ModuleLauncher() = default;
 
-  virtual KernelThunkResultType launchModule(const std::string &name,
-                                             mlir::ModuleOp module,
-                                             const std::vector<void *> &rawArgs,
-                                             mlir::Type resultTy) = 0;
-  virtual void *specializeModule(const std::string &name, mlir::ModuleOp module,
-                                 const std::vector<void *> &rawArgs,
-                                 mlir::Type resultTy, void *cachedEngine) = 0;
+  /// Compile (specialize + JIT) a kernel module and return a ready-to-execute
+  /// CompiledKernel.
+  virtual CompiledKernel compileModule(const std::string &name,
+                                       mlir::ModuleOp module,
+                                       const std::vector<void *> &rawArgs,
+                                       bool isEntryPoint) = 0;
 };
 
 } // namespace cudaq

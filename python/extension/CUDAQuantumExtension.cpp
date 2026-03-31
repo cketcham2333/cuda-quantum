@@ -25,6 +25,7 @@
 #include "runtime/cudaq/algorithms/py_resource_count.h"
 #include "runtime/cudaq/algorithms/py_run.h"
 #include "runtime/cudaq/algorithms/py_sample_async.h"
+#include "runtime/cudaq/algorithms/py_sample_ptsbe.h"
 #include "runtime/cudaq/algorithms/py_state.h"
 #include "runtime/cudaq/algorithms/py_translate.h"
 #include "runtime/cudaq/algorithms/py_unitary.h"
@@ -39,7 +40,7 @@
 #include "runtime/cudaq/operators/py_super_op.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "runtime/cudaq/qis/py_execution_manager.h"
-#include "runtime/cudaq/qis/py_qubit_qis.h"
+#include "runtime/cudaq/qis/py_pauli_word.h"
 #include "runtime/cudaq/target/py_runtime_target.h"
 #include "runtime/cudaq/target/py_testing_utils.h"
 #include "runtime/interop/PythonCppInterop.h"
@@ -106,7 +107,7 @@ PYBIND11_MODULE(_quakeDialects, m) {
   bindOperatorsWrapper(cudaqRuntime);
   bindHandlersWrapper(cudaqRuntime);
   bindSuperOperatorWrapper(cudaqRuntime);
-  bindQIS(cudaqRuntime);
+  bindPauliWord(cudaqRuntime);
   bindOptimizerWrapper(cudaqRuntime);
   bindNoise(cudaqRuntime);
   bindExecutionContext(cudaqRuntime);
@@ -122,6 +123,7 @@ PYBIND11_MODULE(_quakeDialects, m) {
   bindPyTranslate(cudaqRuntime);
   bindCountResources(cudaqRuntime);
   bindSampleAsync(cudaqRuntime);
+  bindSamplePTSBE(cudaqRuntime);
   bindObserveAsync(cudaqRuntime);
   bindAltLaunchKernel(cudaqRuntime, [holderPtr = holder.get()]() {
     return python::getTransportLayer(holderPtr);

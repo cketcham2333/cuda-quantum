@@ -26,6 +26,8 @@ set(COMMON_RUNTIME_SRC
   SampleResult.cpp
   ServerHelper.cpp
   Trace.cpp
+  CompiledKernel.cpp
+  "${CMAKE_BINARY_DIR}/runtime/common/Version.cpp"
 )
 
 # Create the cudaq-common library
@@ -39,7 +41,9 @@ target_include_directories(${LIBRARY_NAME}
     PRIVATE .
         $<BUILD_INTERFACE:${LLVM_INCLUDE_DIRS}>
         ${CMAKE_SOURCE_DIR}/tpls/eigen
-        ${CMAKE_SOURCE_DIR}/runtime)
+        ${CMAKE_SOURCE_DIR}/runtime
+	${CMAKE_SOURCE_DIR}/include
+)
 
 target_link_libraries(${LIBRARY_NAME}
   PUBLIC
@@ -108,11 +112,12 @@ add_library(cudaq-mlir-runtime
   SHARED
     ArgumentConversion.cpp
     CodeGenConfig.cpp
+    Compiler.cpp
     Environment.cpp
     JIT.cpp
     RuntimeMLIR.cpp
     RuntimeCppMLIR.cpp
-    RunTheKernel.cpp
+    LayoutInfo.cpp
 )
 set_property(GLOBAL APPEND PROPERTY CUDAQ_RUNTIME_LIBS cudaq-mlir-runtime)
 
@@ -130,8 +135,7 @@ target_include_directories(cudaq-mlir-runtime
     ${CMAKE_SOURCE_DIR}/runtime)
 
 target_link_libraries(cudaq-mlir-runtime
-  PUBLIC
-    nvqir
+  PRIVATE
     CCDialect
     QuakeDialect
     OptCodeGen
@@ -148,8 +152,9 @@ target_link_libraries(cudaq-mlir-runtime
     MLIRTargetLLVMIRExport
     MLIRLLVMCommonConversion
     MLIRLLVMToLLVMIRTranslation
-  PRIVATE
-    cudaq
+    cudaq-common
+    cudaq-qir-verifier
+    CUDAQTargetConfigUtil
     cudaq-logger
 )
 

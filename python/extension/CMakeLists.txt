@@ -27,16 +27,12 @@ declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT CUDAQuantumPythonSources
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cudaq/mlir"
   TD_FILE dialects/QuakeOps.td
-  SOURCES
-    dialects/quake.py
   DIALECT_NAME quake)
 
 declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT CUDAQuantumPythonSources
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cudaq/mlir"
   TD_FILE dialects/CCOps.td
-  SOURCES
-    dialects/cc.py
   DIALECT_NAME cc)
 
 declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
@@ -57,8 +53,10 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
     ../runtime/cudaq/algorithms/py_observe_async.cpp
     ../runtime/cudaq/algorithms/py_optimizer.cpp
     ../runtime/cudaq/algorithms/py_sample_async.cpp
+    ../runtime/cudaq/algorithms/py_sample_ptsbe.cpp
     ../runtime/cudaq/algorithms/py_resource_count.cpp
     ../runtime/cudaq/algorithms/py_run.cpp
+    ../../runtime/cudaq/algorithms/run.cpp      # Common Python and C++ implementation of run
     ../runtime/cudaq/algorithms/py_state.cpp
     ../runtime/cudaq/algorithms/py_translate.cpp
     ../runtime/cudaq/algorithms/py_unitary.cpp
@@ -66,7 +64,7 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
     ../runtime/cudaq/platform/JITExecutionCache.cpp
     ../runtime/cudaq/platform/py_alt_launch_kernel.cpp
     ../runtime/cudaq/qis/py_execution_manager.cpp
-    ../runtime/cudaq/qis/py_qubit_qis.cpp
+    ../runtime/cudaq/qis/py_pauli_word.cpp
     ../runtime/cudaq/operators/py_helpers.cpp
     ../runtime/cudaq/operators/py_matrix.cpp
     ../runtime/cudaq/operators/py_scalar_op.cpp
@@ -84,9 +82,11 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
     ../utils/LinkedLibraryHolder.cpp
     ../../runtime/common/ArgumentConversion.cpp
     ../../runtime/common/CodeGenConfig.cpp
-    ../../runtime/common/RunTheKernel.cpp
+    ../../runtime/common/LayoutInfo.cpp
     ../../runtime/common/RuntimeMLIR.cpp
     ../../runtime/common/RuntimePyMLIR.cpp
+    ../../runtime/common/JIT.cpp
+    ../../runtime/common/Compiler.cpp
     ../../runtime/cudaq/platform/default/rest_server/RemoteRuntimeClient.cpp
     ../../runtime/cudaq/platform/orca/OrcaExecutor.cpp
     ../../runtime/cudaq/platform/orca/OrcaQPU.cpp
@@ -109,6 +109,7 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
    CUDAQTargetConfigUtil
    cudaq-python-interop
    cudaq-platform-default
+   cudaq-qir-verifier
 )
 
 target_include_directories(CUDAQuantumPythonSources.Extension INTERFACE 

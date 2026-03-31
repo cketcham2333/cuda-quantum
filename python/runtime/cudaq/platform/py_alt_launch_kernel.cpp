@@ -12,6 +12,7 @@
 #include "common/ArgumentConversion.h"
 #include "common/ArgumentWrapper.h"
 #include "common/Environment.h"
+#include "common/LayoutInfo.h"
 #include "cudaq/Optimizer/Builder/Marshal.h"
 #include "cudaq/Optimizer/Builder/Runtime.h"
 #include "cudaq/Optimizer/CAPI/Dialects.h"
@@ -47,8 +48,6 @@
 namespace py = pybind11;
 using namespace mlir;
 
-static std::unique_ptr<cudaq::JITExecutionCache> jitCache;
-
 static std::function<std::string()> getTransportLayer = []() -> std::string {
   throw std::runtime_error("binding for kernel launch is incomplete");
 };
@@ -59,6 +58,7 @@ struct PyStateVectorData {
   cudaq::simulation_precision precision = cudaq::simulation_precision::fp32;
   std::string kernelName;
 };
+
 } // namespace
 using PyStateVectorStorage = std::map<std::string, PyStateVectorData>;
 
@@ -170,31 +170,6 @@ py::args cudaq::simplifiedValidateInputArguments(py::args &args) {
   return processed;
 }
 
-std::pair<std::size_t, std::vector<std::size_t>>
-cudaq::getTargetLayout(mlir::ModuleOp mod, cudaq::cc::StructType structTy) {
-  mlir::StringRef dataLayoutSpec = "";
-  if (auto attr = mod->getAttr(cudaq::opt::factory::targetDataLayoutAttrName))
-    dataLayoutSpec = mlir::cast<mlir::StringAttr>(attr);
-  else
-    throw std::runtime_error("No data layout attribute is set on the module.");
-
-  auto dataLayout = llvm::DataLayout(dataLayoutSpec);
-  // Convert bufferTy to llvm.
-  llvm::LLVMContext context;
-  mlir::LLVMTypeConverter converter(structTy.getContext());
-  cudaq::opt::initializeTypeConversions(converter);
-  auto llvmDialectTy = converter.convertType(structTy);
-  mlir::LLVM::TypeToLLVMIRTranslator translator(context);
-  auto *llvmStructTy =
-      mlir::cast<llvm::StructType>(translator.translateType(llvmDialectTy));
-  auto *layout = dataLayout.getStructLayout(llvmStructTy);
-  auto strSize = layout->getSizeInBytes();
-  std::vector<std::size_t> fieldOffsets;
-  for (std::size_t i = 0, I = structTy.getMembers().size(); i != I; ++i)
-    fieldOffsets.emplace_back(layout->getElementOffset(i));
-  return {strSize, fieldOffsets};
-}
-
 void cudaq::handleStructMemberVariable(void *data, std::size_t offset,
                                        mlir::Type memberType,
                                        py::object value) {
@@ -217,9 +192,10 @@ void cudaq::handleStructMemberVariable(void *data, std::size_t offset,
         auto appendVectorValue = []<typename T>(py::object value, void *data,
                                                 std::size_t offset, T) {
           auto asList = value.cast<py::list>();
-          std::vector<double> *values = new std::vector<double>(asList.size());
+          // Use the correct element type T (not always double).
+          auto *values = new std::vector<T>(asList.size());
           for (std::size_t i = 0; auto &v : asList)
-            (*values)[i++] = v.cast<double>();
+            (*values)[i++] = v.cast<T>();
 
           std::memcpy(((char *)data) + offset, values, 16);
         };
@@ -369,6 +345,10 @@ void cudaq::packArgs(OpaqueArguments &argData, py::list args,
   for (auto [i, zippy] : llvm::enumerate(llvm::zip(args, mlirTys))) {
     py::object arg = py::reinterpret_borrow<py::object>(std::get<0>(zippy));
     Type kernelArgTy = std::get<1>(zippy);
+    if (arg.is_none()) {
+      argData.emplace_back(nullptr, [](void *ptr) {});
+      continue;
+    }
     llvm::TypeSwitch<Type, void>(kernelArgTy)
         .Case([&](ComplexType ty) {
           checkArgumentType<py_ext::Complex>(arg, i);
@@ -507,7 +487,7 @@ void cudaq::packArgs(OpaqueArguments &argData, py::list args,
             py::list arguments = arg.attr("resolved");
             auto startLiftedArgs = [&]() -> std::optional<unsigned> {
               if (!arguments.empty())
-                return decorator.attr("firstLiftedPos").cast<unsigned>();
+                return decorator.attr("formal_arity")().cast<unsigned>();
               return std::nullopt;
             }();
             // build the recursive closure in a C++ object
@@ -622,75 +602,11 @@ cudaq::OpaqueArguments *cudaq::toOpaqueArgs(py::args &args, MlirModule mod,
 static void appendTheResultValue(ModuleOp module, const std::string &name,
                                  cudaq::OpaqueArguments &runtimeArgs,
                                  Type returnType) {
-  TypeSwitch<Type, void>(returnType)
-      .Case([&](IntegerType type) {
-        if (type.getIntOrFloatBitWidth() == 1) {
-          bool *ourAllocatedArg = new bool();
-          *ourAllocatedArg = 0;
-          runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-            delete static_cast<bool *>(ptr);
-          });
-          return;
-        }
-
-        long *ourAllocatedArg = new long();
-        *ourAllocatedArg = 0;
-        runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-          delete static_cast<long *>(ptr);
-        });
-      })
-      .Case([&](ComplexType type) {
-        Py_complex *ourAllocatedArg = new Py_complex();
-        ourAllocatedArg->real = 0.0;
-        ourAllocatedArg->imag = 0.0;
-        runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-          delete static_cast<Py_complex *>(ptr);
-        });
-      })
-      .Case([&](Float64Type type) {
-        double *ourAllocatedArg = new double();
-        *ourAllocatedArg = 0.;
-        runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-          delete static_cast<double *>(ptr);
-        });
-      })
-      .Case([&](Float32Type type) {
-        float *ourAllocatedArg = new float();
-        *ourAllocatedArg = 0.;
-        runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-          delete static_cast<float *>(ptr);
-        });
-      })
-      .Case([&](cudaq::cc::StdvecType ty) {
-        // Vector is a span: `{ data, length }`.
-        struct vec {
-          char *data;
-          std::size_t length;
-        };
-        vec *ourAllocatedArg = new vec{nullptr, 0};
-        runtimeArgs.emplace_back(
-            ourAllocatedArg, [](void *ptr) { delete static_cast<vec *>(ptr); });
-      })
-      .Case([&](cudaq::cc::StructType ty) {
-        auto [size, offsets] = cudaq::getTargetLayout(module, ty);
-        auto ourAllocatedArg = std::malloc(size);
-        runtimeArgs.emplace_back(ourAllocatedArg,
-                                 [](void *ptr) { std::free(ptr); });
-      })
-      .Case([&](cudaq::cc::CallableType ty) {
-        // Callables may not be returned from entry-point kernels. Append a
-        // dummy value as a placeholder.
-        runtimeArgs.emplace_back(nullptr, [](void *) {});
-      })
-      .Default([](Type ty) {
-        std::string msg;
-        {
-          llvm::raw_string_ostream os(msg);
-          ty.print(os);
-        }
-        throw std::runtime_error("Unsupported CUDA-Q kernel return type - " +
-                                 msg + ".\n");
-      });
+  auto [bufferSize, offsets] = cudaq::getResultBufferLayout(module, returnType);
+  if (bufferSize == 0)
+    return;
+  auto *buf = std::calloc(1, bufferSize);
+  runtimeArgs.emplace_back(buf, [](void *ptr) { std::free(ptr); });
 }
 
 // Launching the module \p mod will modify its content, such as by argument
@@ -698,9 +614,9 @@ static void appendTheResultValue(ModuleOp module, const std::string &name,
 // preserve (cache) the IR, and erase the clone after the kernel is done.
 static cudaq::KernelThunkResultType
 pyLaunchModule(const std::string &name, ModuleOp mod,
-               const std::vector<void *> &rawArgs, Type resultTy) {
+               const std::vector<void *> &rawArgs) {
   auto clone = mod.clone();
-  auto res = cudaq::streamlinedLaunchModule(name, clone, rawArgs, resultTy);
+  auto res = cudaq::streamlinedLaunchModule(name, clone, rawArgs);
   clone.erase();
   return res;
 }
@@ -895,18 +811,19 @@ py::object cudaq::convertResult(ModuleOp module, Type ty, char *data) {
 static const std::vector<void *> &
 appendResultToArgsVector(cudaq::OpaqueArguments &runtimeArgs, Type returnType,
                          ModuleOp module, const std::string &name) {
-  if (returnType && !isa<NoneType>(returnType))
+  if (returnType)
     appendTheResultValue(module, name, runtimeArgs, returnType);
   return runtimeArgs.getArgs();
 }
 
 cudaq::KernelThunkResultType
-cudaq::clean_launch_module(const std::string &name, ModuleOp mod, Type retTy,
+cudaq::clean_launch_module(const std::string &name, ModuleOp mod,
                            cudaq::OpaqueArguments &args) {
+  auto kernelFunc = getKernelFuncOp(mod, name);
+  Type retTy = cudaq::runtime::getReturnType(kernelFunc);
   // Append space for a result, as needed, to the vector of arguments.
   auto rawArgs = appendResultToArgsVector(args, retTy, mod, name);
-  Type resTy = isa<NoneType>(retTy) ? Type{} : retTy;
-  return pyLaunchModule(name, mod, rawArgs, resTy);
+  return pyLaunchModule(name, mod, rawArgs);
 }
 
 cudaq::OpaqueArguments
@@ -924,45 +841,58 @@ cudaq::marshal_arguments_for_module_launch(ModuleOp mod, py::args runtimeArgs,
 
 py::object cudaq::marshal_and_launch_module(const std::string &name,
                                             MlirModule module,
-                                            MlirType returnType,
                                             py::args runtimeArgs) {
   ScopedTraceWithContext("marshal_and_launch_module", name);
   auto kernelFunc = getKernelFuncOp(module, name);
   auto mod = unwrap(module);
-  Type retTy = unwrap(returnType);
+  Type retTy = cudaq::runtime::getReturnType(kernelFunc);
   auto args = marshal_arguments_for_module_launch(mod, runtimeArgs, kernelFunc);
-  [[maybe_unused]] auto resultPtr = clean_launch_module(name, mod, retTy, args);
+  [[maybe_unused]] auto resultPtr = clean_launch_module(name, mod, args);
   // FIXME: handle dynamic sized results!
 
-  if (isa<NoneType>(retTy))
+  if (!retTy)
     return py::none();
   return cudaq::convertResult(mod, retTy,
                               reinterpret_cast<char *>(args.getArgs().back()));
 }
 
-// NB: `cachedEngine` is actually of type `mlir::ExecutionEngine**`.
-static void *marshal_and_retain_module(const std::string &name,
-                                       MlirModule module, MlirType returnType,
-                                       void *cachedEngine,
-                                       py::args runtimeArgs) {
+// Return the pointer to the JITted LLVM code for the entry point function, and
+// a cache key for the JIT engine that was used to JIT the module. The engine is
+// cached and cleaned up automatically. The caller can use the cache key to
+// manually clean up the engine as well by calling
+// `delete_cache_execution_engine` with the cache key.
+static std::pair<void *, std::size_t>
+marshal_and_retain_module(const std::string &name, MlirModule module,
+                          bool isEntryPoint, py::args runtimeArgs) {
   ScopedTraceWithContext("marshal_and_retain_module", name);
-  if (!cachedEngine)
-    throw std::runtime_error(
-        "Must have a storage location to retain the ExecutionEngine provided");
+  std::optional<cudaq::JitEngine> cachedEngine;
+
   auto kernelFunc = cudaq::getKernelFuncOp(module, name);
   auto mod = unwrap(module);
-  Type retTy = unwrap(returnType);
+  Type retTy = cudaq::runtime::getReturnType(kernelFunc);
   auto args =
       cudaq::marshal_arguments_for_module_launch(mod, runtimeArgs, kernelFunc);
   // Append space for a result, as needed, to the vector of arguments.
   auto rawArgs = appendResultToArgsVector(args, retTy, mod, name);
-  Type resTy = isa<NoneType>(retTy) ? Type{} : retTy;
   auto clone = mod.clone();
   // Returns the pointer to the JITted LLVM code for the entry point function.
-  void *funcPtr = cudaq::streamlinedSpecializeModule(name, clone, rawArgs,
-                                                     resTy, cachedEngine);
+  void *funcPtr = cudaq::streamlinedSpecializeModule(
+      name, clone, rawArgs, cachedEngine, isEntryPoint);
   clone.erase();
-  return funcPtr;
+  // `streamlinedSpecializeModule` should always set the cached engine pointer
+  if (!cachedEngine)
+    throw std::runtime_error("Failed to retrieve the JIT engine pointer when "
+                             "specializing the module.");
+  // Use address of the allocated `ExecutionEngine` as the hash key to cache the
+  // JITted engine, and store the engine pointer in the cache
+  const size_t cacheKey = cachedEngine->getKey();
+  cudaq::JITExecutionCache::getJITCache().cache(cacheKey, cachedEngine.value());
+  return std::make_pair(funcPtr, cacheKey);
+}
+
+// Clean up the cached JIT engine corresponding to the given cache key.
+static void delete_cache_execution_engine(std::size_t cacheKey) {
+  cudaq::JITExecutionCache::getJITCache().deleteJITEngine(cacheKey);
 }
 
 static MlirModule synthesizeKernel(py::object kernel, py::args runtimeArgs) {
@@ -1151,7 +1081,6 @@ static std::size_t get_launch_args_required(MlirModule module,
 
 void cudaq::bindAltLaunchKernel(py::module &mod,
                                 std::function<std::string()> &&getTL) {
-  jitCache = std::make_unique<JITExecutionCache>();
   getTransportLayer = std::move(getTL);
 
   mod.def("lower_to_codegen", lower_to_codegen,
@@ -1168,7 +1097,8 @@ void cudaq::bindAltLaunchKernel(py::module &mod,
           "The kernel is NOT executed, but rather cached to a location managed "
           "by the calling code. This allows the calling code to invoke the "
           "entry point with a regular C++ call.");
-
+  mod.def("delete_cache_execution_engine", delete_cache_execution_engine,
+          "Delete a cached JIT execution engine with the given cache key.");
   mod.def("pyAltLaunchAnalogKernel", pyAltLaunchAnalogKernel,
           "Launch an analog Hamiltonian simulation kernel with given JSON "
           "payload.");

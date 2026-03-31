@@ -134,14 +134,14 @@ except Exception:
 from .display import display_trace
 from .kernel.kernel_decorator import kernel, PyKernelDecorator
 from .kernel.kernel_builder import (make_kernel, QuakeValue, PyKernel)
-from .kernel.ast_bridge import (globalAstRegistry, globalRegisteredOperations,
-                                PyASTBridge)
+from .kernel.ast_bridge import (globalRegisteredOperations, PyASTBridge)
 from .runtime.sample import sample
 from .runtime.sample import sample_async, AsyncSampleResult
 from .runtime.observe import observe
 from .runtime.observe import observe_async
 from .runtime.run import run
 from .runtime.run import run_async
+from .runtime import ptsbe
 from .runtime.translate import translate
 from .runtime.state import (get_state, get_state_async, to_cupy)
 from .runtime.draw import draw
@@ -163,22 +163,20 @@ else:
 # Add the parallel runtime types
 parallel = cudaq_runtime.parallel
 
-# Primitive Types
-qubit = cudaq_runtime.qubit
-qvector = cudaq_runtime.qvector
-qview = cudaq_runtime.qview
+# Primitive Types (stubs; used only in kernels, parsed to MLIR)
+from .kernel_types import qubit, qvector, qview
+
 Pauli = cudaq_runtime.Pauli
 Kernel = PyKernel
 Target = cudaq_runtime.Target
 State = cudaq_runtime.State
-StateMemoryView = cudaq_runtime.StateMemoryView
 pauli_word = cudaq_runtime.pauli_word
 Tensor = cudaq_runtime.Tensor
 SimulationPrecision = cudaq_runtime.SimulationPrecision
 Resources = cudaq_runtime.Resources
 
 # to be deprecated
-qreg = cudaq_runtime.qvector
+qreg = qvector
 
 # Operator API
 from .operators import boson
@@ -288,8 +286,7 @@ def amplitudes(array_data):
 
 
 def __clearKernelRegistries():
-    global globalAstRegistry, globalRegisteredOperations
-    globalAstRegistry.clear()
+    global globalRegisteredOperations
     globalRegisteredOperations.clear()
 
 

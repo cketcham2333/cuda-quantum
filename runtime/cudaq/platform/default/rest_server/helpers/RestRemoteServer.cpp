@@ -20,6 +20,7 @@
 #include "cudaq/Optimizer/Dialect/Quake/QuakeDialect.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
+#include "cudaq/Verifier/NVQIRCalls.h"
 #include "cudaq/runtime/logger/logger.h"
 #include "nvqir/CircuitSimulator.h"
 #include "server_impl/RestServer.h"
@@ -72,10 +73,9 @@ T getValueOrThrow(llvm::Expected<T> valOrErr,
                   const std::string &errorMsgToThrow) {
   if (valOrErr)
     return std::move(*valOrErr);
-  else {
-    LLVMConsumeError(llvm::wrap(valOrErr.takeError()));
-    throw std::runtime_error(errorMsgToThrow);
-  }
+
+  LLVMConsumeError(llvm::wrap(valOrErr.takeError()));
+  throw std::runtime_error(errorMsgToThrow);
 }
 
 // Clear any registered operations in the ExecutionManager and then destroy the
@@ -93,10 +93,28 @@ template <typename Func>
 auto withExecutionContextExceptRun(cudaq::ExecutionContext &io_context,
                                    cudaq::quantum_platform &platform, Func &&fn)
     -> decltype(fn()) {
-  if (io_context.name != "run") {
+  if (io_context.name != "run")
     return platform.with_execution_context(io_context, std::forward<Func>(fn));
-  } else {
-    return fn();
+  return fn();
+}
+
+/// Util to invoke a wrapped kernel defined by LLVM IR with serialized
+/// arguments.
+// Optionally, the JIT'ed kernel can be executed a number of
+// times along with a post-execution callback. For example, sample a dynamic
+// kernel.
+void invokeWrappedKernel(
+    std::function<void()> func, cudaq::ExecutionContext &executionContext,
+    std::size_t numTimes = 1,
+    std::function<void(std::size_t)> postExecCallback = {}) {
+  auto &platform = cudaq::get_platform();
+  for (std::size_t i = 0; i < numTimes; ++i) {
+    // Invoke the wrapper with serialized data and the kernel.
+    platform.with_execution_context(executionContext, [&]() {
+      func();
+      if (postExecCallback)
+        postExecCallback(i);
+    });
   }
 }
 
@@ -149,6 +167,7 @@ public:
     return std::make_pair(cudaq::RestRequest::REST_PAYLOAD_VERSION,
                           cudaq::RestRequest::REST_PAYLOAD_MINOR_VERSION);
   }
+
   virtual void
   init(const std::unordered_map<std::string, std::string> &configs) override {
     const auto portIter = configs.find("port");
@@ -194,6 +213,7 @@ public:
     m_mlirContext = cudaq::getOwningMLIRContext();
     m_hasMpi = cudaq::mpi::is_initialized();
   }
+
   // Start the server.
   virtual void start() override {
     if (!m_server)
@@ -216,6 +236,7 @@ public:
       }
     }
   }
+
   // Stop the server.
   virtual void stop() override { m_server->stop(); }
 
@@ -322,13 +343,15 @@ public:
     // any calls to `platform` functions could invoke code that relies on the
     // JIT being present.
     std::unique_ptr<llvm::orc::LLJIT> llvmJit;
+    std::function<void()> wrappedKernel;
     if (requestInfo.format == cudaq::CodeFormat::LLVM) {
       if (io_context.name == "sample") {
         // In library mode (LLVM), check to see if we have mid-circuit measures
         // by tracing the kernel function.
         cudaq::ExecutionContext context("tracer");
-        llvmJit = cudaq::invokeWrappedKernel(ir, std::string(kernelName),
-                                             kernelArgs, argsSize, context);
+        std::tie(llvmJit, wrappedKernel) = cudaq::createWrappedKernel(
+            ir, std::string(kernelName), kernelArgs, argsSize);
+        invokeWrappedKernel(wrappedKernel, context);
         // In trace mode, if we have a measure result
         // that is passed to an if statement, then
         // we'll have collected registerNames
@@ -345,14 +368,15 @@ public:
           // deleted.
           clearRegOpsAndDestroyJIT(llvmJit);
           // If it has conditionals, loop over individual circuit executions
-          llvmJit = cudaq::invokeWrappedKernel(
-              ir, std::string(kernelName), kernelArgs, argsSize, io_context,
-              io_context.shots, [&](std::size_t i) {
-                // Flush the single measure result and add it to the
-                // sample_result
-                counts += io_context.result;
-                io_context.result.clear();
-              });
+          std::tie(llvmJit, wrappedKernel) = cudaq::createWrappedKernel(
+              ir, std::string(kernelName), kernelArgs, argsSize);
+          invokeWrappedKernel(wrappedKernel, io_context, io_context.shots,
+                              [&](std::size_t i) {
+                                // Flush the single measure result and
+                                // add it to the sample_result
+                                counts += io_context.result;
+                                io_context.result.clear();
+                              });
           io_context.result = counts;
         } else {
           // If no conditionals, nothing special to do for library mode
@@ -360,12 +384,14 @@ public:
           // in an LLVM JIT, we must clear them before any prior LLVM JIT gets
           // deleted.
           clearRegOpsAndDestroyJIT(llvmJit);
-          llvmJit = cudaq::invokeWrappedKernel(
-              ir, std::string(kernelName), kernelArgs, argsSize, io_context);
+          std::tie(llvmJit, wrappedKernel) = cudaq::createWrappedKernel(
+              ir, std::string(kernelName), kernelArgs, argsSize);
+          invokeWrappedKernel(wrappedKernel, io_context);
         }
       } else {
-        llvmJit = cudaq::invokeWrappedKernel(ir, std::string(kernelName),
-                                             kernelArgs, argsSize, io_context);
+        std::tie(llvmJit, wrappedKernel) = cudaq::createWrappedKernel(
+            ir, std::string(kernelName), kernelArgs, argsSize);
+        invokeWrappedKernel(wrappedKernel, io_context);
       }
     } else {
       if (io_context.name == "run") {
@@ -434,34 +460,14 @@ protected:
 
       CUDAQ_INFO("- Pass manager was applied.");
     }
+
     // Verify MLIR conforming to the NVQIR-spec (known runtime functions and/or
     // QIR functions)
-    {
-      // Collect all functions that are defined (and have non-empty bodies) in
-      // this module Op.
-      const std::vector<llvm::StringRef> allFunctionNames = [&]() {
-        std::vector<llvm::StringRef> allFuncs;
-        for (auto &op : *module.getBody())
-          if (auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(op))
-            if (!funcOp.getFunctionBody().empty())
-              allFuncs.emplace_back(funcOp.getName());
-        return allFuncs;
-      }();
-      // Note: run this verification as a standalone step to decouple IR
-      // conversion and verification.
-      // Verification condition: all function definitions can only make function
-      // calls to:
-      //  (1) NVQIR-compliance functions, or
-      //  (2) other functions defined in this module.
-      PassManager pm(ctx);
-      pm.addNestedPass<LLVM::LLVMFuncOp>(
-          cudaq::opt::createVerifyNVQIRCallOpsPass(allFunctionNames));
-      if (failed(pm.run(module)))
-        throw std::runtime_error(
-            "Failed check to verify IR compliance for NVQIR runtime.");
+    if (failed(cudaq::verifier::checkNvqirCalls(module)))
+      throw std::runtime_error(
+          "Failed check to verify IR compliance for NVQIR runtime.");
 
-      CUDAQ_INFO("- Finish IR input verification.");
-    }
+    CUDAQ_INFO("- Finish IR input verification.");
 
     opts.llvmModuleBuilder =
         [](Operation *module,
@@ -559,9 +565,9 @@ protected:
   void *loadNvqirSimLib(const std::string &simulatorName) {
     const std::filesystem::path cudaqLibPath{cudaq::getCUDAQLibraryPath()};
 #if defined(__APPLE__) && defined(__MACH__)
-    const auto libSuffix = "dylib";
+    constexpr const char libSuffix[] = "dylib";
 #else
-    const auto libSuffix = "so";
+    constexpr const char libSuffix[] = "so";
 #endif
     const auto simLibPath =
         cudaqLibPath.parent_path() /

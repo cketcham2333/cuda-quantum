@@ -17,7 +17,7 @@ from cudaq import spin
 
 
 @pytest.fixture(autouse=True)
-def do_something():
+def run_and_clear_registries():
     yield
     cudaq.__clearKernelRegistries()
 
@@ -224,7 +224,8 @@ def test_observe_list():
 
     sum = 5.907
     for r in results:
-        sum += r.expectation() * np.real(r.get_spin().get_coefficient())
+        sum += r.expectation() * np.real(
+            next(iter(r.get_spin())).evaluate_coefficient())
     print(sum)
     want_expectation_value = -1.7487948611472093
     assert np.isclose(want_expectation_value, sum, atol=1e-2)

@@ -25,7 +25,7 @@ if [ "$(uname)" = "Darwin" ]; then
   mkdir -p "$HOME/.local/bin"
   mkdir -p "$HOME/.local/share/lib"
   export PATH="$PATH:$HOME/.local/bin"
-  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$HOME/.local/share/lib"
+  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HOME/.local/share/lib"
   export LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$HOME/.local/llvm}
   export BLAS_INSTALL_PREFIX=${BLAS_INSTALL_PREFIX:-$HOME/.local/blas}
   export ZLIB_INSTALL_PREFIX=${ZLIB_INSTALL_PREFIX:-$HOME/.local/zlib}
@@ -38,6 +38,9 @@ if [ "$(uname)" = "Darwin" ]; then
   # Homebrew's libomp via 'brew install libomp'), set LLVM_PROJECTS without openmp.
   # `export LLVM_PROJECTS='clang;lld;mlir;python-bindings'`
   export LLVM_PROJECTS=${LLVM_PROJECTS:-'clang;lld;mlir;python-bindings;openmp'}
+  # Set minimum macOS deployment target for consistent builds.
+  # This ensures LLVM/clang and CUDA-Q libraries use the same target.
+  export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 else
   # Linux: system-wide installations (may require sudo)
   export LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-/opt/llvm}
@@ -47,7 +50,7 @@ else
   export OPENSSL_INSTALL_PREFIX=${OPENSSL_INSTALL_PREFIX:-/usr/lib/ssl}
   export CURL_INSTALL_PREFIX=${CURL_INSTALL_PREFIX:-/usr/local/curl}
   export AWS_INSTALL_PREFIX=${AWS_INSTALL_PREFIX:-/usr/local/aws}
+  export QRMI_INSTALL_PREFIX=${QRMI_INSTALL_PREFIX:-/usr/local/qrmi}
   export CUQUANTUM_INSTALL_PREFIX=${CUQUANTUM_INSTALL_PREFIX:-/opt/nvidia/cuquantum}
   export CUTENSOR_INSTALL_PREFIX=${CUTENSOR_INSTALL_PREFIX:-/opt/nvidia/cutensor}
 fi
-
